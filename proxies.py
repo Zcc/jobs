@@ -14,16 +14,14 @@ headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36
 
 class Proxy:
     def __init__(self):
-        if not os.path.isfile('proxies'):
-            self.getwebip()
         self.proxies = [ip.strip() for ip in open('proxies').readlines()]
         self.tot = 0
 
     def getwebip(self):
-        proxiesfile = open('proxies','w')
+        proxiesfile = open('proxies','a')
         for i in xrange(5):
-            #r = requests.get('http://www.mimiip.com/gngao/'+str(i))
-            r = requests.get('http://ip84.com/gn/' + str(i))
+            r = requests.get('http://www.mimiip.com/gngao/'+str(i))
+            #r = requests.get('http://ip84.com/gn/' + str(i))
             #r = requests.get('http://www.xicidaili.com/nn/' + str(i),headers=headers)
             #r = requests.get('http://www.kuaidaili.com/free/inha/' + str(i)+'/',headers=headers)
             soup = BeautifulSoup(r.content, 'html.parser')
@@ -34,19 +32,16 @@ class Proxy:
                         ip = 'http://'+trlist[0].text+":"+trlist[1].text
                         proxiesfile.write(ip+'\n')
         proxiesfile.close()
-
-    def getProxyies(self):
-        return self.proxies
+        self.proxies = [ip.strip() for ip in open('proxies').readlines()]
+        self.tot = 0
 
     def nextip(self):
         self.tot += 1
         if self.tot > len(self.proxies):
             self.getwebip()
-            self.__init__()
-            self.tot=0
 
     def getip(self):
-        return self.proxies[self.tot%len(self.proxies)]
+        return self.proxies[self.tot]
 
     def getproxies(self):
         ip = self.getip()
@@ -54,6 +49,7 @@ class Proxy:
 
 if __name__ == '__main__':
     p = Proxy()
+    p.getwebip()
     print p.getip()
     p.nextip()
     print p.getproxies()
