@@ -1,18 +1,20 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 import os
-import proxies
+from proxies import Proxy
 import requests
 import sys
 import json
 import MySQLdb
 import logging
+import multiprocessing
 from bs4 import BeautifulSoup
 import time
+import pickle
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
-date = time.strftime('%Y-%m-%d', time.localtime())
+date = time.strftime('%Y-%m-%d-%X', time.localtime()).replace(':', '-')
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(filename)s line:%(lineno)d [%(levelname)s]:%(message)s',
                     datefmt='%a, %d %b %Y %H:%M:%S',
@@ -25,9 +27,14 @@ database = 'jobs'
 
 
 # 读取职位列表
-def readweb(p):
-    print '获取职位类别列表.....'
+def readweb():
+    print u'get jobdict.....'
     configmap = {}
+    jobnamesfile = 'jobnames.pkl'
+    if os.path.isfile(jobnamesfile):
+        configmap = pickle.load(open(jobnamesfile))
+        return configmap
+    p = Proxy()
     while (True):
         proxies = p.getproxies()
         try:
@@ -47,11 +54,20 @@ def readweb(p):
                 joblist.append(jobname)
             configmap[jobtype] = joblist
     logging.info('configmap.size:' + str(len(configmap.keys())))
+    print 'configmap.size:' + str(len(configmap.keys()))
+    output = open(jobnamesfile, 'w')
+    pickle.dump(configmap, output)
+    output.close()
     return configmap
 
 
 # 根据职位名爬取招聘信息
-def scrapy(jobname, p):
+def scrapy(jobname):
+    # print 'crawling ' + jobname + '.....'
+    p = Proxy()
+    db = MySQLdb.connect(dbadd, user, password, database,
+                         use_unicode=True, charset="utf8")
+    cursor = db.cursor()
     req_url = 'http://www.lagou.com/jobs/positionAjax.json?'
     headers = {'content-type': 'application/json;charset=UTF-8'}
     while (True):
@@ -59,21 +75,20 @@ def scrapy(jobname, p):
         try:
             req = requests.post(req_url, params={'first': 'false', 'pn': 1, 'kd': jobname}, headers=headers, timeout=60,
                                 proxies=proxies, allow_redirects=False)
+            totalCount = req.json()['content']['positionResult']['totalCount']
+            pageSize = req.json()['content']['positionResult']['pageSize']
+            maxpagenum = totalCount / pageSize
 
-            maxpagenum = req.json()['content']['positionResult']['totalCount'] / \
-                         req.json()['content']['positionResult']['pageSize']
             break
         except Exception, e:
             p.nextip()
             logging.debug(str(e))
     flag = True
     num = 1
-    print '包含 '+str(req.json()['content']['positionResult']['totalCount'])+' 条招聘信息'
+    print jobname + ' contain ' + str(totalCount)
     logging.info('maxpagenum:' + str(maxpagenum))
     while flag:
         payload = {'first': 'false', 'pn': num, 'kd': jobname}
-        if num %100==0:
-            print '已爬取 '+str(num)+' 条'
         while (True):
             try:
                 response = requests.post(
@@ -87,22 +102,34 @@ def scrapy(jobname, p):
             flag = False
         if response.status_code == 200:
             try:
-                job_json = response.json()['content']['positionResult']['result']
-                write_db(job_json)
+                job_json = response.json()['content'][
+                    'positionResult']['result']
+                write_db(job_json, cursor)
+                db.commit()
             except Exception, e:
                 logging.debug(str(e))
         else:
             print('connect error! url = ' + req_url)
         num += 1
+    cursor.close()
+    db.close()
     return True
 
+
+# 多进程爬取json
+
+
 def crawl_json():
-    p = proxies.Proxy()
-    jobdict = readweb(p)
+    jobdict = readweb()
+    pool = multiprocessing.Pool(processes=4)
     for jobtype in jobdict:
         for jobname in jobdict[jobtype]:
-            print 'crawling',jobtype,jobname,'.....'
-            scrapy(jobname,p)
+            pool.apply_async(scrapy, (jobname,))
+    print 'start crawling.....'
+    pool.close()
+    pool.join()
+    print 'done!'
+    # db.close()
 
 
 # 计算平均工资
@@ -119,9 +146,7 @@ def normalize(value):
 
 
 # 写入数据库
-def write_db(job_json):
-    db = MySQLdb.connect(dbadd, user, password, database, use_unicode=True, charset="utf8")
-    cursor = db.cursor()
+def write_db(job_json, cursor):
     for each_job_info_obj in job_json:
         values = []
         values.append(each_job_info_obj['positionId'])
@@ -142,7 +167,6 @@ def write_db(job_json):
         try:
             cursor.execute(
                 'insert into lagoujobs values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', values)
-            db.commit()
         except Exception, e:
             if 'Duplicate' not in str(e):
                 logging.debug(str(e))
@@ -150,7 +174,6 @@ def write_db(job_json):
                 cursor.execute(
                     'update lagoujobs set formatCreateTime = %s where positionId = %s',
                     [each_job_info_obj['createTime'].encode('utf-8'), each_job_info_obj['positionId']])
-                db.commit()
             continue
         values = []
         values.append(each_job_info_obj['companyId'])
@@ -159,22 +182,21 @@ def write_db(job_json):
         try:
             cursor.execute(
                 'insert into company values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', values)
-            db.commit()
         except Exception, e:
             if 'Duplicate' not in str(e):
                 logging.debug(str(e))
             continue
-    cursor.close()
-    db.close()
 
 
 # 分析每个职位页面详情,返回职位详细信息
+
+
 def get_job_info_byid(job_id, p):
     req_url = 'http://www.lagou.com/jobs/' + str(job_id) + '.html'
     str_txt = ''
     while (True):
         try:
-            proxies = p.getProxyies()
+            proxies = p.getproxies()
             req = requests.get(req_url, proxies=proxies, timeout=30)
             html = req.content
             if u'亲，你来晚了，该信息已经被删除鸟~' in html:
@@ -184,31 +206,48 @@ def get_job_info_byid(job_id, p):
             str_txt = job_bt_soup[0].text
             break
         except Exception, e:
-            print e
+            logging.debug(str(e))
             p.nextip()
     return str_txt
 
 
-# 获取description为空的职位的职位信息
-def get_job_description():
-    db = MySQLdb.connect(dbadd, user, password, database, use_unicode=True, charset="utf8")
+def crawl_job_detail():
+    db = MySQLdb.connect(dbadd, user, password, database,
+                         use_unicode=True, charset="utf8")
     cursor = db.cursor()
     cursor.execute("select positionId from lagoujobs where description = \"\"")
-    p = proxies.Proxy()
-    f = open('finished.txt')
-    finishlist = [j.strip() for j in f.readlines()]
-    f.close()
-    fi = open('finished.txt', 'a')
+    i = 0
+    fetchallist = []
+    pool = multiprocessing.Pool(processes=4)
     for idi in cursor.fetchall():
-        if str(idi[0]) in finishlist:
-            continue
+        fetchallist.append(idi)
+        i += 1
+        if i % 100 == 0:
+            pool.apply_async(get_job_description, (fetchallist,))
+            fetchallist = []
+    print 'start.....'
+    pool.close()
+    pool.join()
+    cursor.close()
+    db.close()
+    print 'done!'
+
+
+# 获取description为空的职位的职位信息
+
+
+def get_job_description(fetchallist):
+    db = MySQLdb.connect(dbadd, user, password, database,
+                         use_unicode=True, charset="utf8")
+    cursor = db.cursor()
+    p = Proxy()
+    for idi in fetchallist:
         details = get_job_info_byid(idi[0], p).replace('\n', '*#')
         print idi[0], details[:2]
         values = [details, idi[0]]
-        cursor.execute('update lagoujobs set description = %s where positionId = %s', values)
+        cursor.execute(
+            'update lagoujobs set description = %s where positionId = %s', values)
         db.commit()
-        fi.write(str(idi[0]) + '\n')
-    fi.close()
     cursor.close()
     db.close()
 
@@ -227,14 +266,13 @@ def get_company_info_byid(company_id, p):
     proxies = p.getproxies()
     req_url = 'http://www.lagou.com/gongsi/' + str(company_id) + '.html'
     try:
-        req = requests.get(req_url, proxies=proxies, timeout=60, headers=headers)
+        req = requests.get(req_url, proxies=proxies,
+                           timeout=60, headers=headers)
     except Exception, e:
         logging.debug(str(e))
         if 'passport.lagou.com' in str(e) or 'disappear.html' in str(e):
             return ['delete', 'delete', 'delete', 'delete', 'delete', 'delete', 'delete', 'delete', 'delete', 'delete']
         return
-    #if req.status_code != 200:
-    #    return ['delete', 'delete', 'delete', 'delete', 'delete', 'delete', 'delete', 'delete', 'delete', 'delete']
     html = req.content
     html_soup = BeautifulSoup(html, 'html.parser')
     job_bt_soup = html_soup.select('#companyInfoData')
@@ -285,21 +323,21 @@ def get_company_info_byid(company_id, p):
 
 
 # 获取公司信息不全的公司id并更新
-def get_company_description():
-    db = MySQLdb.connect(dbadd, user, password, database, use_unicode=True, charset="utf8")
+def get_company_description(fetchallist):
+    db = MySQLdb.connect(dbadd, user, password, database,
+                         use_unicode=True, charset="utf8")
     cursor = db.cursor()
-    cursor.execute("select companyId,companyName from company where companyUrl = \"\" and fullName = \"\"")
-    p = proxies.Proxy()
-    for id in cursor.fetchall():
+    p = Proxy()
+    for id in fetchallist:
         while (True):
             try:
                 values = get_company_info_byid(id[0], p)
-                values.append("更新公司信息："+str(id[0]))
+                values.append(id[0])
                 cursor.execute(
                     'update company set companyUrl = %s,description = %s,fullName = %s,shortName = %s,detailPosition = %s,industryField = %s,companySize = %s,city = %s,financeStage = %s,profile = %s where companyId = %s',
                     values)
                 db.commit()
-                print id[0]
+                print u"update：", id[0]
                 break
             except Exception, e:
                 logging.debug(str(e))
@@ -308,7 +346,30 @@ def get_company_description():
     db.close()
 
 
-if __name__ == '__main__':
-    crawl_json()
-    #get_company_description()
+def crawl_company_detail():
+    db = MySQLdb.connect(dbadd, user, password, database,
+                         use_unicode=True, charset="utf8")
+    cursor = db.cursor()
+    cursor.execute("select companyId,companyName from company where companyUrl = \"\" and fullName = \"\"")
+    i = 0
+    fetchallist = []
+    pool = multiprocessing.Pool(processes=4)
+    for idi in cursor.fetchall():
+        fetchallist.append(idi)
+        i += 1
+        if i % 100 == 0:
+            pool.apply_async(get_company_description, (fetchallist,))
+            fetchallist = []
+    pool.apply_async(get_company_description, (fetchallist,))
+    print 'start.....'
+    pool.close()
+    pool.join()
+    cursor.close()
+    db.close()
+    print 'done!'
 
+
+if __name__ == '__main__':
+    # crawl_json()
+    # crawl_job_detail()
+    crawl_company_detail()
