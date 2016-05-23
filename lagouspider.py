@@ -17,7 +17,6 @@ sys.setdefaultencoding('utf-8')
 date = time.strftime('%Y-%m-%d-%X', time.localtime()).replace(':', '-')
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(filename)s line:%(lineno)d [%(levelname)s]:%(message)s',
-                    datefmt='%a, %d %b %Y %H:%M:%S',
                     filename='logs/' + date + '.log',
                     filemode='a')
 dbadd = 'localhost'
@@ -222,9 +221,10 @@ def crawl_job_detail():
     for idi in cursor.fetchall():
         fetchallist.append(idi)
         i += 1
-        if i % 100 == 0:
+        if i % 40 == 0:
             pool.apply_async(get_job_description, (fetchallist,))
             fetchallist = []
+    pool.apply_async(get_job_description, (fetchallist,))
     print 'start.....'
     pool.close()
     pool.join()
@@ -234,8 +234,6 @@ def crawl_job_detail():
 
 
 # 获取description为空的职位的职位信息
-
-
 def get_job_description(fetchallist):
     db = MySQLdb.connect(dbadd, user, password, database,
                          use_unicode=True, charset="utf8")
@@ -371,5 +369,5 @@ def crawl_company_detail():
 
 if __name__ == '__main__':
     # crawl_json()
-    # crawl_job_detail()
-    crawl_company_detail()
+    crawl_job_detail()
+    #crawl_company_detail()

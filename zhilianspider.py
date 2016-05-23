@@ -9,13 +9,13 @@ from proxies import Proxy
 import time
 import logging
 import multiprocessing
-
+import pickle
+import os
 reload(sys)
 sys.setdefaultencoding('utf-8')
 date = time.strftime('%Y-%m-%d-%X', time.localtime()).replace(':', '-')
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(filename)s line:%(lineno)d [%(levelname)s]:%(message)s',
-                    datefmt='%a, %d %b %Y %H:%M:%S',
                     filename='logs/' + date + '.log',
                     filemode='a')
 dbadd = 'localhost'
@@ -75,6 +75,10 @@ def createTables():
 
 
 def joblists():
+    jobnamesfile = 'zhilianjobnames.pkl'
+    if os.path.isfile(jobnamesfile):
+        jobdict = pickle.load(open(jobnamesfile))
+        return jobdict
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.94 Safari/537.36'}
     r = requests.get('http://sou.zhaopin.com/', headers=headers)
@@ -86,10 +90,14 @@ def joblists():
         for job in clearfixed.h1.find_all("a"):
             lists.append((job.text, job['href']))
         jobdict[(clearfixed.p.text, clearfixed.p.a['href'])] = lists
+    output = open(jobnamesfile, 'w')
+    pickle.dump(jobdict, output)
+    output.close()
     return jobdict
 
 
-def crawl_byid(jobid):
+def crawl_byid(job, jobid, jobtype):
+    print job, jobtype
     p = Proxy()
     db = MySQLdb.connect(dbadd, user, password, database)
     db.set_character_set('utf8')
@@ -159,136 +167,38 @@ def crawl_byid(jobid):
                         experience = jobdetail[4].text[3:]
                     if '学历' in jobdetail[4].encode('UTF-8'):
                         education = jobdetail[4].text[3:]
-            values = [joburl, companyurl, time, experience, jobname, job[
-                0], companyname, location, education, jobtype[0], companypolarity, companyscale, salary, 0, detail]
-            # print values
+            values = [joburl, companyurl, time, experience, jobname, job, companyname, location,
+                      education, jobtype, companypolarity, companyscale, salary, 0, detail, '', '', '', '']
+            #print values
+            #break
             try:
                 cursor.execute(
-                    'insert into zhilianjobs values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', values)
+                    'insert into zhilianjobs values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', values)
                 db.commit()
             except Exception, e:
                 if 'Duplicate' not in e[1]:
                     logging.debug(str(e))
             values = [companyurl, companyname,
-                      '', '', companyscale, '', '']
-            # print values
+                      '', '', companyscale, '', '','']
             try:
                 cursor.execute(
-                    'insert into zhiliancompany values (%s,%s,%s,%s,%s,%s,%s)', values)
+                    'insert into zhiliancompany values (%s,%s,%s,%s,%s,%s,%s,%s)', values)
                 db.commit()
             except Exception, e:
                 if 'Duplicate' not in e[1]:
                     logging.debug(str(e))
+        #break
 
-
-def spider():
-    db = MySQLdb.connect(dbadd, user, password, database)
-    db.set_character_set('utf8')
-    cursor = db.cursor()
-    cursor.execute('SET NAMES utf8;')
-    cursor.execute('SET CHARACTER SET utf8;')
-    cursor.execute('SET character_set_connection=utf8;')
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.94 Safari/537.36'}
-    host = 'http://sou.zhaopin.com'
+def crawl():
     lists = joblists()
-    p = Proxy()
-    tot = 0
-    f = open('finished.txt')
-    finished = [j.strip().decode("utf-8") for j in f.readlines()]
-    f.close()
-    finished[0] = finished[0][1:]
+    pool = multiprocessing.Pool(processes=4)
     for jobtype in lists.keys():
-        print jobtype[0]
         for job in lists[jobtype]:
-            tot += 1
-            print job[0], tot
-            if jobtype[0] + job[0] in finished:
-                continue
-            for i in xrange(10):
-                url = host + job[1] + u'&jl=全国&sb=2&p=' + str(i)
-                while (True):
-                    try:
-                        ipadd = p.getip()
-                        proxies = {'http': ipadd, 'https': ipadd}
-                        r = requests.get(url, headers=headers,
-                                         proxies=proxies, timeout=60)
-                        html_soup = BeautifulSoup(r.content, 'html.parser')
-                        job_bt_soup = html_soup.select(
-                            '.newlist_list_content')[0]
-                        break
-                    except Exception, e:
-                        logging.debug(str(e))
-                        p.nextip()
-                for table in job_bt_soup.find_all('table')[1:]:
-                    if len(table.select('.zwmc')) <= 0:
-                        continue
-                    zwmc = table.select('.zwmc')[0]
-                    joburl = zwmc.a['href']
-                    jobname = zwmc.a.text
-                    companyurl = ''
-                    companyname = ''
-                    salary = ''
-                    location = ''
-                    time = ''
-                    detail = ''
-                    jobdetail = ''
-                    companypolarity = ''
-                    companyscale = ''
-                    if len(table.select('.gsmc')) > 0:
-                        gsmc = table.select('.gsmc')[0]
-                        companyurl = gsmc.a['href']
-                        companyname = gsmc.a.text
-                    if len(table.select('.zwyx')) > 0:
-                        salary = table.select('.zwyx')[0].text
-                    if len(table.select('.gzdd')) > 0:
-                        location = table.select('.gzdd')[0].text
-                    if len(table.select('.gxsj')) > 0:
-                        time = table.select('.gxsj')[0].span.text
-                    if len(table.select('.newlist_deatil_last')) > 0:
-                        detail = table.select('.newlist_deatil_last')[0].text
-                    if len(table.select('.newlist_deatil_two')) > 0:
-                        jobdetail = table.select('.newlist_deatil_two')[
-                            0].find_all('span')
-                        companypolarity = jobdetail[1].text[5:]
-                        companyscale = jobdetail[2].text[5:]
-                    education = ''
-                    experience = ''
-                    if len(jobdetail) > 3:
-                        if '经验' in jobdetail[3].encode('UTF-8'):
-                            experience = jobdetail[3].text[3:]
-                        if '学历' in jobdetail[3].encode('UTF-8'):
-                            education = jobdetail[3].text[3:]
-                        if len(jobdetail) > 4:
-                            if '经验' in jobdetail[4].encode('UTF-8'):
-                                experience = jobdetail[4].text[3:]
-                            if '学历' in jobdetail[4].encode('UTF-8'):
-                                education = jobdetail[4].text[3:]
-                    values = [joburl, companyurl, time, experience, jobname, job[
-                        0], companyname, location, education, jobtype[0], companypolarity, companyscale, salary, 0,
-                              detail]
-                    # print values
-                    try:
-                        cursor.execute(
-                            'insert into zhilianjobs values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', values)
-                        db.commit()
-                    except Exception, e:
-                        if 'Duplicate' not in e[1]:
-                            logging.debug(str(e))
-                    values = [companyurl, companyname,
-                              '', '', companyscale, '', '']
-                    # print values
-                    try:
-                        cursor.execute(
-                            'insert into zhiliancompany values (%s,%s,%s,%s,%s,%s,%s)', values)
-                        db.commit()
-                    except Exception, e:
-                        if 'Duplicate' not in e[1]:
-                            logging.debug(str(e))
-            finishedf = open('finished.txt', 'a')
-            finishedf.write(jobtype[0] + job[0] + '\n')
-    cursor.close()
-    db.close()
+            pool.apply_async(crawl_byid, (job[0], job[1], jobtype[0]))
+    print 'start crawling.....'
+    pool.close()
+    pool.join()
+    print 'done!'
 
 
 def avasalary(salary):
@@ -414,18 +324,18 @@ def crawl_job_detail():
     db = MySQLdb.connect(dbadd, user, password, database,
                          use_unicode=True, charset="utf8")
     cursor = db.cursor()
-    cursor.execute("select positionId,companyId from zhilianjobs WHERE number = \"\"")
+    cursor.execute(
+        "select positionId,companyId from zhilianjobs WHERE number = \"\"")
     i = 0
     fetchallist = []
     pool = multiprocessing.Pool(processes=4)
     for idi in cursor.fetchall():
         fetchallist.append(idi)
         i += 1
-        #if i == 400:
-        #    break
         if i % 1000 == 0:
             pool.apply_async(getdetail, (fetchallist,))
             fetchallist = []
+    pool.apply_async(getdetail, (fetchallist,))
     print 'start.....'
     pool.close()
     pool.join()
@@ -435,23 +345,7 @@ def crawl_job_detail():
 
 
 if __name__ == '__main__':
-    # createTables()
-    # spider()
-    # getdetail()
+    # joblists()
+    crawl()
     crawl_job_detail()
-    # db = MySQLdb.connect(dbadd, user, password, database,
-    #                      use_unicode=True, charset="utf8")
-    # cursor = db.cursor()
-    # p = Proxy()
-    # values = getdetailbyid('http://jobs.zhaopin.com/000001367251918.htm',p)
-    # val = values[:6]
-    # val.append('http://jobs.zhaopin.com/000001367251918.htm')
-    # try:
-    #     cursor.execute(
-    #         'update zhilianjobs set companyId = %s,labels = %s,property = %s,workYear = %s,number = %s,detaildescription = %s where positionId = %s',
-    #         val)
-    #     db.commit()
-    # except Exception, e:
-    #     logging.debug(str(e))
-    # cursor.close()
-    # db.close()
+    #crawl()
