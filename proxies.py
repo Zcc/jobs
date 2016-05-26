@@ -14,7 +14,7 @@ headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36
 
 class Proxy:
     def __init__(self):
-        self.proxies = [ip.strip() for ip in open('proxies').readlines()]
+        self.proxies = [ip.strip() for ip in open('dict/proxies').readlines()]
         self.tot = 0
 
     def getwebip(self):

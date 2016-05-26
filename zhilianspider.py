@@ -11,62 +11,75 @@ import logging
 import multiprocessing
 import pickle
 import os
+from dbconfig import config
+
 reload(sys)
 sys.setdefaultencoding('utf-8')
-date = time.strftime('%Y-%m-%d-%X', time.localtime()).replace(':', '-')
+date = time.strftime('%Y-%m-%d', time.localtime())
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(filename)s line:%(lineno)d [%(levelname)s]:%(message)s',
                     filename='logs/' + date + '.log',
                     filemode='a')
-dbadd = 'localhost'
-user = 'root'
-password = '123123'
-database = 'jobs'
+[dbadd, user, password, database] = config()
 
 
 def createTables():
     db = MySQLdb.connect(dbadd, user, password, database)
     cursor = db.cursor()
 
-    sql = "DROP TABLE IF EXISTS `zhilianjobs`;"
-    cursor.execute(sql)
-    db.commit()
     sql = """
 		CREATE TABLE `zhilianjobs` (
-	  `positionId` VARCHAR(255) NOT NULL,
-	  `companyId` VARCHAR(255) NOT NULL,
-	  `formatCreateTime` VARCHAR(255) NOT NULL,
-	  `workYear` VARCHAR(255) NOT NULL,
-	  `positionName` VARCHAR(255) NOT NULL,
-	  `positionType` VARCHAR(255) NOT NULL,
-	  `companyName` VARCHAR(255) NOT NULL,
-	  `city` VARCHAR(255) NOT NULL,
-	  `education` VARCHAR(255) NOT NULL,
-	  `industryField` VARCHAR(255) NOT NULL,
-	  `financeStage` VARCHAR(255) NOT NULL,
-	  `companysize` VARCHAR(255) NOT NULL,
-	  `salary` VARCHAR(255) NOT NULL,
-	  `averagesalary` int(10) NOT NULL,
-	  `description` VARCHAR(2000) NOT NULL,
-	  PRIMARY KEY (`positionId`)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8;"""
+      `positionId` varchar(255) NOT NULL,
+      `companyId` varchar(255) NOT NULL,
+      `formatCreateTime` varchar(255) NOT NULL,
+      `workYear` varchar(255) NOT NULL,
+      `positionName` varchar(255) NOT NULL,
+      `positionType` varchar(255) NOT NULL,
+      `companyName` varchar(255) NOT NULL,
+      `city` varchar(255) NOT NULL,
+      `education` varchar(255) NOT NULL,
+      `industryField` varchar(255) NOT NULL,
+      `financeStage` varchar(255) NOT NULL,
+      `companysize` varchar(255) NOT NULL,
+      `salary` varchar(255) NOT NULL,
+      `averagesalary` int(10) NOT NULL,
+      `description` varchar(2000) NOT NULL,
+      `detaildescription` varchar(6000) NOT NULL,
+      `number` varchar(255) NOT NULL,
+      `labels` varchar(255) NOT NULL,
+      `property` varchar(255) NOT NULL,
+      PRIMARY KEY (`positionId`),
+      KEY `idx_pid` (`positionId`),
+      KEY `idx_cid` (`companyId`),
+      KEY `idx_pn` (`positionName`),
+      KEY `idx_pt` (`positionType`),
+      KEY `idx_city` (`city`),
+      KEY `idx_if` (`industryField`),
+      KEY `idx_as` (`averagesalary`),
+      KEY `idx_cn` (`companyName`),
+      KEY `idx_num` (`number`),
+      KEY `idx_tm` (`formatCreateTime`),
+      KEY `idx_jct` (`city`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8;"""
     cursor.execute(sql)
     db.commit()
 
-    sql = "DROP TABLE IF EXISTS `zhiliancompany`;"
-    cursor.execute(sql)
-    db.commit()
     sql = """
 			CREATE TABLE `zhiliancompany` (
-		  `companyId` VARCHAR(255) NOT NULL,
-		  `companyName` VARCHAR(255) NOT NULL,
-		  `companyURL` VARCHAR(255) NOT NULL,
-		  `industryField` VARCHAR(255) NOT NULL,
-		  `companysize` VARCHAR(255) NOT NULL,
-		   `detailPosition` VARCHAR(255) NOT NULL,
-		  `description` VARCHAR(2000) NOT NULL,
-		  PRIMARY KEY (`companyId`)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8;"""
+          `companyId` varchar(255) NOT NULL,
+          `companyName` varchar(255) NOT NULL,
+          `companyURL` varchar(255) NOT NULL,
+          `industryField` varchar(255) NOT NULL,
+          `companysize` varchar(255) NOT NULL,
+          `detailPosition` varchar(255) NOT NULL,
+          `description` varchar(4000) NOT NULL,
+          `financeStage` varchar(255) NOT NULL,
+          PRIMARY KEY (`companyId`),
+          KEY `idx_cpid` (`companyId`),
+          KEY `idx_ccn` (`companyName`),
+          KEY `idx_curl` (`companyURL`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+"""
     cursor.execute(sql)
     db.commit()
     cursor.close()
@@ -75,7 +88,7 @@ def createTables():
 
 
 def joblists():
-    jobnamesfile = 'zhilianjobnames.pkl'
+    jobnamesfile = 'dict/zhilianjobnames.pkl'
     if os.path.isfile(jobnamesfile):
         jobdict = pickle.load(open(jobnamesfile))
         return jobdict
@@ -169,8 +182,6 @@ def crawl_byid(job, jobid, jobtype):
                         education = jobdetail[4].text[3:]
             values = [joburl, companyurl, time, experience, jobname, job, companyname, location,
                       education, jobtype, companypolarity, companyscale, salary, 0, detail, '', '', '', '']
-            #print values
-            #break
             try:
                 cursor.execute(
                     'insert into zhilianjobs values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', values)
@@ -179,7 +190,9 @@ def crawl_byid(job, jobid, jobtype):
                 if 'Duplicate' not in e[1]:
                     logging.debug(str(e))
             values = [companyurl, companyname,
-                      '', '', companyscale, '', '','']
+                      '', '', companyscale, '', '', '']
+            if 'redirecturl?url=' in companyurl:
+                continue
             try:
                 cursor.execute(
                     'insert into zhiliancompany values (%s,%s,%s,%s,%s,%s,%s,%s)', values)
@@ -187,7 +200,7 @@ def crawl_byid(job, jobid, jobtype):
             except Exception, e:
                 if 'Duplicate' not in e[1]:
                     logging.debug(str(e))
-        #break
+
 
 def crawl():
     lists = joblists()
@@ -195,7 +208,7 @@ def crawl():
     for jobtype in lists.keys():
         for job in lists[jobtype]:
             pool.apply_async(crawl_byid, (job[0], job[1], jobtype[0]))
-    print 'start crawling.....'
+    print 'start crawling zhilianjobs.....'
     pool.close()
     pool.join()
     print 'done!'
@@ -344,8 +357,12 @@ def crawl_job_detail():
     print 'done!'
 
 
-if __name__ == '__main__':
-    # joblists()
+def crawlzhilian():
     crawl()
     crawl_job_detail()
-    #crawl()
+
+if __name__ == '__main__':
+    try:
+        createTables()
+    except Exception, e:
+        logging.debug(str(e))

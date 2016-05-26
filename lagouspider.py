@@ -11,25 +11,24 @@ import multiprocessing
 from bs4 import BeautifulSoup
 import time
 import pickle
+from dbconfig import config
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
-date = time.strftime('%Y-%m-%d-%X', time.localtime()).replace(':', '-')
+
+date = time.strftime('%Y-%m-%d', time.localtime())
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(filename)s line:%(lineno)d [%(levelname)s]:%(message)s',
                     filename='logs/' + date + '.log',
                     filemode='a')
-dbadd = 'localhost'
-user = 'root'
-password = '123123'
-database = 'jobs'
+[dbadd, user, password, database] = config()
 
 
 # 读取职位列表
 def readweb():
     print u'get jobdict.....'
     configmap = {}
-    jobnamesfile = 'jobnames.pkl'
+    jobnamesfile = 'dict/jobnames.pkl'
     if os.path.isfile(jobnamesfile):
         configmap = pickle.load(open(jobnamesfile))
         return configmap
@@ -116,15 +115,13 @@ def scrapy(jobname):
 
 
 # 多进程爬取json
-
-
 def crawl_json():
     jobdict = readweb()
     pool = multiprocessing.Pool(processes=4)
     for jobtype in jobdict:
         for jobname in jobdict[jobtype]:
             pool.apply_async(scrapy, (jobname,))
-    print 'start crawling.....'
+    print 'start crawling lagoujobs.....'
     pool.close()
     pool.join()
     print 'done!'
@@ -348,7 +345,8 @@ def crawl_company_detail():
     db = MySQLdb.connect(dbadd, user, password, database,
                          use_unicode=True, charset="utf8")
     cursor = db.cursor()
-    cursor.execute("select companyId,companyName from company where companyUrl = \"\" and fullName = \"\"")
+    cursor.execute(
+        "select companyId,companyName from company where companyUrl = \"\" and fullName = \"\"")
     i = 0
     fetchallist = []
     pool = multiprocessing.Pool(processes=4)
@@ -367,7 +365,82 @@ def crawl_company_detail():
     print 'done!'
 
 
+def createTables():
+    db = MySQLdb.connect(dbadd, user, password, database)
+    cursor = db.cursor()
+    sql = """
+        CREATE TABLE `lagoujobs` (
+      `positionId` int(10) unsigned NOT NULL,
+      `companyId` int(10) unsigned NOT NULL,
+      `formatCreateTime` varchar(255) NOT NULL,
+      `workYear` varchar(255) NOT NULL,
+      `positionName` varchar(255) NOT NULL,
+      `positionType` varchar(255) NOT NULL,
+      `companyName` varchar(255) NOT NULL,
+      `city` varchar(255) NOT NULL,
+      `education` varchar(255) NOT NULL,
+      `industryField` varchar(255) NOT NULL,
+      `financeStage` varchar(255) NOT NULL,
+      `salary` varchar(255) NOT NULL,
+      `companysize` varchar(255) NOT NULL,
+      `averagesalary` int(10) NOT NULL,
+      `description` varchar(4000) NOT NULL,
+      PRIMARY KEY (`positionId`),
+      KEY `idx_pid` (`positionId`),
+      KEY `idx_cid` (`companyId`),
+      KEY `idx_pn` (`positionName`),
+      KEY `idx_pt` (`positionType`),
+      KEY `idx_city` (`city`),
+      KEY `idx_if` (`industryField`),
+      KEY `idx_as` (`averagesalary`),
+      KEY `idx_cn` (`companyName`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+"""
+    cursor.execute(sql)
+    db.commit()
+    sql = """
+            CREATE TABLE `company` (
+          `companyId` int(10) unsigned NOT NULL,
+          `companyName` varchar(255) NOT NULL,
+          `companyURL` varchar(255) NOT NULL,
+          `description` varchar(2000) NOT NULL,
+          `fullName` varchar(255) NOT NULL,
+          `shortName` varchar(255) NOT NULL,
+          `detailPosition` varchar(1000) NOT NULL,
+          `industryField` varchar(255) NOT NULL,
+          `companySize` varchar(255) NOT NULL,
+          `city` varchar(255) NOT NULL,
+          `financeStage` varchar(255) NOT NULL,
+          `profile` varchar(2000) NOT NULL,
+          PRIMARY KEY (`companyId`),
+          KEY `idx_cpid` (`companyId`),
+          KEY `idx_ccn` (`companyName`),
+          KEY `idx_curl` (`companyURL`),
+          KEY `idx_fname` (`fullName`),
+          KEY `idx_sname` (`shortName`),
+          KEY `idx_if` (`industryField`),
+          KEY `idx_ct` (`city`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+
+"""
+    cursor.execute(sql)
+    db.commit()
+    cursor.close()
+    db.close()
+    return
+
+
+def crawllagou():
+    crawl_json()
+    listenProcess = multiprocessing.Process(target=crawl_job_detail)
+    listenProcess.start()
+    crawl_company_detail()
+
 if __name__ == '__main__':
-    # crawl_json()
-    crawl_job_detail()
-    #crawl_company_detail()
+    try:
+        createTables()
+    except Exception, e:
+        logging.debug(str(e))
+
